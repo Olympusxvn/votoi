@@ -1,0 +1,12 @@
+{
+  "funder": "0x5dc5f85e4ca400f971f0166cba041bb33a37dadb1d2511b9a87b9150c8b2e1ac",
+  "spender": "0xb33fcc35268837f0ff46a299703f15ab65923717805edfb253295cbee1d1d6e0",
+  "payee": "0x3ca8aee71d707b54a3391eac41d622b9ad15b49e32a6bf6b6d7252d005608804",
+  "allowanceId": "0xfc2d88f88530ea90ee749e9b1e6d7ffd8151ca40ea03369d5b409da50b7b5bae",
+  "issueDigest": "reused",
+  "spendDigest": "2uGV6eyPPkzpjL9TJcLiKHWsea468GFu9pJhr7h2NPGx",
+  "capMist": "10000000",
+  "spendMist": "5000000",
+  "funderBalanceAfter": "21541052",
+  "at": "2026-10-21T08:12:31.056Z"
+}
