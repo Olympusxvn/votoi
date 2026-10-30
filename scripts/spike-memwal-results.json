@@ -1,0 +1,61 @@
+{
+  "userId": "0x3ca8aee71d707b54a3391eac41d622b9ad15b49e32a6bf6b6d7252d005608804",
+  "storedAt": "2026-10-21T08:09:39.704Z",
+  "results": [
+    {
+      "serialized": "[watchdog:merchant_habit] GrabFood | orders lunch 4x per week, avg 12.50 USD per order | warn when weekly GrabFood spend passes 40 USD",
+      "blobId": "S_iIzRYdfZvBC-JPg-pNSsKLnW4zctFUV8tQkvPVRv0",
+      "jobId": "38fcd1ff-bced-4c67-b71c-59156129dd00"
+    },
+    {
+      "serialized": "[watchdog:merchant_habit] Highlands Coffee | coffee 5x per week, avg 3.20 USD per visit | suggest a weekly coffee cap of 15 USD",
+      "blobId": "xlBfUOysDWHnhFeIICr7C0gKKsIH1cZ2FaSx8zT97Lc",
+      "jobId": "d104ee5c-afcd-4f83-a39c-33196321af8f"
+    },
+    {
+      "serialized": "[watchdog:merchant_habit] Circle K | late night snacks 3x per week, avg 4.75 USD | include in the weekly discretionary spend report",
+      "blobId": "VV1A98FASP5Ba4GMurtq5rk8juzQAQDRLrTlGRmDdJE",
+      "jobId": "9d33f48f-9b39-439d-9f2a-1addb4e20f36"
+    },
+    {
+      "serialized": "[watchdog:budget_risk] dining out | weekend dining spikes to 85 USD, about 2x the weekday average | alert when a single dining transaction exceeds 50 USD",
+      "blobId": "h3TbEXI__UBfz_JrKqnEhXut99h7DQwWtXtJKGGDzpA",
+      "jobId": "5f7c1e62-7507-4287-91fd-7d00b66ba193"
+    },
+    {
+      "serialized": "[watchdog:budget_risk] online shopping | Shopee orders cluster at month end, avg 120 USD per month | flag months where shopping passes 100 USD before day 25",
+      "blobId": "wwg3lki0XuOovG2hV0jZ4BJSA5KAkhEL8gI_Z1Z9TIc",
+      "jobId": "152d26f4-86e6-4c6f-b708-a915903729b8"
+    },
+    {
+      "serialized": "[watchdog:budget_risk] transport | ride hailing reaches 60 USD in rainy weeks | alert when weekly transport spend passes 55 USD",
+      "blobId": "iveeJNzV0_38Vn0kxpkf7UoPMzhyqXzaTWP3lug-LgU",
+      "jobId": "aad0d350-ce77-405d-9eeb-0ab675374d68"
+    },
+    {
+      "serialized": "[watchdog:payment_rule] shared expenses | dinner bills are split equally with group members | always split group meals equally unless told otherwise",
+      "blobId": "8_KWthuXBCUWZMZLylKkRzR886SjavfahbcmELw-Vek",
+      "jobId": "d36edc4f-0978-4489-b99b-9e15efea5a65"
+    },
+    {
+      "serialized": "[watchdog:payment_rule] subscriptions | Netflix 11.99 USD renews on the 15th each month | remind 2 days before each subscription renewal",
+      "blobId": "xJ9N2XViTVtgcPgDdJNzeutswDEtishguh0S1DelRqQ",
+      "jobId": "1f6a04af-9db5-4d84-b840-d6db8a08b068"
+    },
+    {
+      "serialized": "[watchdog:payment_rule] agent autopay | agent may auto pay approved expense splits onchain | require human approval for any agent payment above 50 USD per transaction",
+      "blobId": "_zHymICafGrc_aVBz0VgvY0CgILx2sQlOKhghDXEoVI",
+      "jobId": "b079c5ab-b6dd-47b4-aa1e-f29b0862cf4e"
+    },
+    {
+      "serialized": "[watchdog:preference] currency display | user wants every amount shown in USD | never show VND or SUI amounts without the USD equivalent",
+      "blobId": "4VN3NP2zE6zN68yNMKTCfBQeg3vN52APGzD7NMgNPtc",
+      "jobId": "0a68b3c9-87b0-461d-85d7-ce3fa3cdf439"
+    },
+    {
+      "serialized": "[watchdog:preference] notifications | user prefers one daily summary at 20:00 | batch non urgent alerts into the daily summary",
+      "blobId": "vFMjtZ4gbcgpPhhZl1lhLfclIu1jlRW5HyEKUrvLte4",
+      "jobId": "a4769cf6-b651-4dcd-8448-d3fb451f7ee2"
+    }
+  ]
+}
