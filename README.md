@@ -8,6 +8,13 @@ an escrow or a custodial balance.
 Built for the **Walrus x Tatum: Total Recall Hackathon, Track 2: Smart
 Agents for Real Life**.
 
+## Two pillars
+
+**Memory on Walrus Mainnet.** 12 facts, 12 distinct blobs, one namespace per wallet. Walrus is the canonical store; Postgres is only a volatile cache. Wipe the cache and the same facts rebuild from chain. Every deterministic chat answer cites its facts by blob id.
+
+**Payments via Sui allowances, x402-style.** The agent never holds your funds: it spends from a native Sui allowance in one atomic PTB, spender pays gas, capped at 50.00 USD with over-limit payments recorded as `awaiting_approval` and never sent. Settled proof: 0.01 USD paid from chat ([Suiscan](https://suiscan.xyz/mainnet/tx/BDFfAHCMFFNnk5ERmBxqndZvin7NTTXXxPHJgUsFudrh)).
+
+
 ## Verify it in 60 seconds
 
 A judge does not have to take anything below on trust. Each claim has a
