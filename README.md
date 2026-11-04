@@ -43,7 +43,7 @@ check that runs in under a minute:
 - **Memory that outlives the session.** Learned facts (merchant habits,
   budget risks, payment rules, preferences) are written to Walrus Memory
   Mainnet as the canonical store. A Neon Postgres cache sits in front for
-  fast reads, so chat answers from cache within a 2 second budget while
+  fast reads, so chat answers from cache typically within 2 seconds while
   Walrus writes happen asynchronously.
 - **Payments with a leash.** A funder issues a native Sui allowance
   naming the agent as spender, with onchain lifetime and rate limits.
