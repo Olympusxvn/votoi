@@ -30,9 +30,11 @@ interface FactItem {
 
 interface PaymentItem {
   recipient: string;
+  recipients?: { address: string; amountUsd: number }[];
   amountUsd: number;
-  status: 'confirmed' | 'pending' | 'failed';
+  status: string;
   digest: string;
+  failureReason?: string;
   timestamp: number;
 }
 
@@ -51,6 +53,15 @@ interface ChatMessage {
   role: 'user' | 'agent';
   text: string;
   timestamp: number;
+  action?: string;
+  citations?: { subject: string; blobId: string }[];
+}
+
+interface ReceiptDetail {
+  status: 'queued' | 'processing' | 'done' | 'failed' | 'timeout';
+  merchant: string | null;
+  amountUsd: number | null;
+  error: string | null;
 }
 
 interface ToastMessage {
@@ -93,6 +104,8 @@ export default function App() {
   const [chatInput, setChatInput] = useState<string>('');
   const [isAgentTyping, setIsAgentTyping] = useState<boolean>(false);
   const [receiptStatus, setReceiptStatus] = useState<string | null>(null);
+  const [receiptDetail, setReceiptDetail] = useState<ReceiptDetail | null>(null);
+  const receiptPollId = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Issue Allowance inputs
@@ -220,6 +233,8 @@ export default function App() {
         role: 'agent',
         text: data.reply || 'No response recorded.',
         timestamp: Date.now(),
+        action: data.action,
+        citations: data.citations,
       };
       setMessages((prev) => [...prev, agentMsg]);
 
@@ -253,7 +268,8 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setReceiptStatus('Uploading receipt to Walrus...');
+    setReceiptStatus('Uploading receipt...');
+    setReceiptDetail(null);
     const formData = new FormData();
     formData.append('receipt', file);
     formData.append('userId', userId);
@@ -264,12 +280,52 @@ export default function App() {
         body: formData,
       });
       if (!res.ok) throw new Error('Receipt upload failed');
-      await res.json();
-      setReceiptStatus('Receipt received, processing in background');
+      const data = await res.json();
       addToast('Receipt uploaded and queued for background OCR', 'success');
-      setTimeout(() => {
+      // Poll the local queue record only (not a blockchain endpoint): every
+      // 3s, up to 60s. The record honestly stays "queued" until a vision
+      // provider fills the OCR text, so a timeout ends in an honest
+      // "still queued" state, never an invented read result.
+      const pollId = ++receiptPollId.current;
+      const sha = data.receiptSha256 as string;
+      let terminal = false;
+      for (let attempt = 0; attempt < 20 && !terminal; attempt++) {
+        if (pollId !== receiptPollId.current) return;
+        setReceiptStatus('Receipt queued for background OCR...');
+        await new Promise((r) => setTimeout(r, 3000));
+        if (pollId !== receiptPollId.current) return;
+        try {
+          const statusRes = await fetch(`/api/receipts/${sha}`);
+          if (!statusRes.ok) throw new Error('Receipt status unavailable');
+          const detail = await statusRes.json();
+          if (detail.status === 'done' || detail.status === 'failed') {
+            setReceiptDetail(detail);
+            setReceiptStatus(null);
+            terminal = true;
+          } else {
+            setReceiptDetail(detail);
+          }
+        } catch {
+          setReceiptStatus(null);
+          setReceiptDetail({
+            status: 'failed',
+            merchant: null,
+            amountUsd: null,
+            error: 'Receipt status unavailable.',
+          });
+          terminal = true;
+        }
+      }
+      if (!terminal && pollId === receiptPollId.current) {
         setReceiptStatus(null);
-      }, 5000);
+        setReceiptDetail({
+          status: 'timeout',
+          merchant: null,
+          amountUsd: null,
+          error:
+            'Still queued after 60s: the OCR vision provider is not configured yet, so no text was extracted. Nothing was faked.',
+        });
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Upload error';
       setReceiptStatus(null);
@@ -365,6 +421,7 @@ export default function App() {
   const otherFacts = facts.filter(
     (f) => f.subject.toLowerCase() !== 'spending profile'
   );
+  const budgetRiskFacts = facts.filter((f) => f.factType === 'budget_risk');
 
   const suggestionChips = [
     'I spent 12.50 USD on GrabFood',
@@ -559,13 +616,14 @@ export default function App() {
           <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-sm">
             <div className="flex items-center gap-sm">
               <span className="font-semibold text-brand-primary text-xs tracking-wider uppercase">
-                Demo Script Beat {demoStep} of 4:
+                Demo Script Beat {demoStep} of 5:
               </span>
               <span className="text-sm font-medium text-primary">
                 {demoStep === 1 && '1. Tell VOTOI about an expense in chat to trigger autonomous extraction.'}
                 {demoStep === 2 && '2. Inspect the newly formed memory fact and its cryptographic Walrus blob.'}
                 {demoStep === 3 && '3. Wipe local application cache to prove persistence lives on Walrus.'}
                 {demoStep === 4 && '4. Issue an onchain allowance and pay 0.01 USD within set limits.'}
+                {demoStep === 5 && '5. Upload a receipt and follow its async OCR status.'}
               </span>
             </div>
 
@@ -610,7 +668,7 @@ export default function App() {
                 <button
                   onClick={() => {
                     handleSendChat('Pay 0.01 USD to the agent wallet');
-                    setDemoStep(1);
+                    setDemoStep(5);
                   }}
                   className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                 >
@@ -618,8 +676,22 @@ export default function App() {
                   <ArrowRight className="size-3.5" />
                 </button>
               )}
+              {demoStep === 5 && (
+                <button
+                  onClick={() => {
+                    document
+                      .getElementById('chat-panel')
+                      ?.scrollIntoView({ behavior: 'smooth' });
+                    setDemoStep(1);
+                  }}
+                  className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+                >
+                  Go: Open Receipt Upload
+                  <ArrowRight className="size-3.5" />
+                </button>
+              )}
               <button
-                onClick={() => setDemoStep((s) => (s % 4) + 1)}
+                onClick={() => setDemoStep((s) => (s % 5) + 1)}
                 className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
               >
                 Skip Beat
@@ -635,7 +707,7 @@ export default function App() {
         <section
           id="chat-panel"
           className={`lg:col-span-5 flex flex-col rounded-xl border bg-primary p-xl shadow-xs min-h-[600px] ${
-            demoActive && demoStep === 1 ? 'border-brand ring-2 ring-focus-ring' : 'border-secondary'
+            demoActive && (demoStep === 1 || demoStep === 5) ? 'border-brand ring-2 ring-focus-ring' : 'border-secondary'
           }`}
         >
           <div className="pb-md border-b border-secondary flex items-center justify-between">
@@ -664,6 +736,43 @@ export default function App() {
                 >
                   <p className="whitespace-pre-wrap">{m.text}</p>
                 </div>
+                {m.role === 'agent' && m.action === 'payment_needs_approval' && (
+                  <div className="max-w-[88%] mt-xs rounded-lg border border-utility-warning-200 bg-utility-warning-50 p-md text-xs text-utility-warning-700">
+                    Over the 50.00 USD single-transaction limit — needs your
+                    approval, not sent onchain. No approval action exists yet,
+                    so nothing was sent.
+                  </div>
+                )}
+                {m.role === 'agent' && m.citations && m.citations.length > 0 && (
+                  <div className="max-w-[88%] mt-xs text-[11px] text-tertiary space-y-xxs">
+                    <span className="font-medium text-secondary">
+                      Sources (Walrus):
+                    </span>
+                    {m.citations.map((c, i) => (
+                      <div key={i} className="flex items-center gap-xs font-mono">
+                        <span className="font-sans text-secondary">{c.subject}</span>
+                        <span>
+                          {c.blobId ? `${c.blobId.slice(0, 10)}...` : 'no blob id'}
+                        </span>
+                        {c.blobId && (
+                          <button
+                            onClick={() =>
+                              copyToClipboard(c.blobId, `cite-${m.id}-${i}`)
+                            }
+                            className="text-secondary hover:text-primary"
+                            aria-label="Copy Walrus blob ID"
+                          >
+                            {copiedId === `cite-${m.id}-${i}` ? (
+                              <Check className="size-3.5 text-fg-success-primary" />
+                            ) : (
+                              <Copy className="size-3.5" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <span className="text-[10px] text-tertiary mt-xxs px-xs">
                   {new Date(m.timestamp).toLocaleTimeString([], {
                     hour: '2-digit',
@@ -720,6 +829,35 @@ export default function App() {
             )}
           </div>
 
+          {/* Receipt OCR result (live queue record, never invented) */}
+          {receiptDetail && (
+            <div
+              className={`py-xs px-md rounded-lg border text-xs ${
+                receiptDetail.status === 'done'
+                  ? 'border-utility-success-200 bg-utility-success-50 text-utility-success-700'
+                  : receiptDetail.status === 'failed' || receiptDetail.status === 'timeout'
+                  ? 'border-utility-warning-200 bg-utility-warning-50 text-utility-warning-700'
+                  : 'border-secondary bg-secondary text-secondary'
+              }`}
+            >
+              {receiptDetail.status === 'done' && (
+                <span>
+                  Receipt read: {receiptDetail.merchant} — $
+                  {receiptDetail.amountUsd?.toFixed(2)} USD. A fact will be
+                  learned from it.
+                </span>
+              )}
+              {(receiptDetail.status === 'queued' ||
+                receiptDetail.status === 'processing') && (
+                <span>Receipt in OCR queue — status updates here when text is extracted.</span>
+              )}
+              {(receiptDetail.status === 'failed' ||
+                receiptDetail.status === 'timeout') && (
+                <span>{receiptDetail.error}</span>
+              )}
+            </div>
+          )}
+
           {/* Chat Input */}
           <form
             onSubmit={(e) => {
@@ -770,6 +908,42 @@ export default function App() {
           </div>
 
           <div className="flex-1 py-md overflow-y-auto space-y-md">
+            {/* Walrus proof strip: facts live on Walrus Memory Mainnet,
+                not in the app database — the wipe button below proves it. */}
+            {!factsLoading && !factsError && facts.length > 0 && (
+              <div className="rounded-lg border border-secondary bg-secondary px-md py-sm text-xs text-secondary flex flex-wrap items-center gap-x-lg gap-y-xxs">
+                <span>
+                  <span className="font-semibold text-primary">{facts.length}</span> facts
+                  {' '}· Walrus Memory Mainnet
+                </span>
+                <span>
+                  Relayer: {status?.relayerStatus ?? 'unknown'}
+                </span>
+              </div>
+            )}
+
+            {/* Budget-risk summary: aggregates budget_risk facts so the
+                "Any budget risks this month?" question has a visible answer. */}
+            {!factsLoading && !factsError && facts.length > 0 && (
+              <div className="rounded-xl border border-utility-error-200 bg-utility-error-50 p-xl shadow-xs space-y-xs">
+                <span className="text-xs font-semibold uppercase tracking-wider text-utility-error-700">
+                  This month&apos;s risks
+                </span>
+                {budgetRiskFacts.length > 0 ? (
+                  <ul className="list-disc pl-md space-y-xxs">
+                    {budgetRiskFacts.map((f, i) => (
+                      <li key={i} className="text-xs text-primary">
+                        {f.subject}
+                        <span className="text-tertiary"> — {f.pattern}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-secondary">No budget risks recorded.</p>
+                )}
+              </div>
+            )}
+
             {factsLoading && (
               <div className="space-y-sm">
                 {[1, 2, 3].map((i) => (
@@ -972,6 +1146,33 @@ export default function App() {
                 </div>
               </div>
 
+              {status?.lifetimeCapUsd != null && (
+                <div className="space-y-xs">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-tertiary">Remaining:</span>
+                    <span className="text-primary font-semibold">
+                      ${(status.lifetimeCapUsd - status.spentUsd).toFixed(2)} USD
+                    </span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-tertiary overflow-hidden">
+                    <div
+                      className="h-full bg-brand-solid"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          (status.spentUsd / status.lifetimeCapUsd) * 100
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+              <p className="text-[11px] text-tertiary leading-normal">
+                Funds stay in your balance until a spend succeeds — no escrow,
+                no pre-funding. The agent pays through your allowance,
+                x402-style, and only inside its onchain limits.
+              </p>
+
               {status?.allowanceId && (
                 <button
                   onClick={() => setShowRevokeConfirm(true)}
@@ -1070,28 +1271,56 @@ export default function App() {
                     </span>
                     <span
                       className={`inline-flex items-center gap-xs rounded-full border px-md py-xxs text-xs font-medium uppercase ${
-                        p.status === 'confirmed'
+                        p.status === 'settled'
                           ? 'border-utility-success-200 bg-utility-success-50 text-utility-success-700'
-                          : 'border-utility-warning-200 bg-utility-warning-50 text-utility-warning-700'
+                          : p.status === 'awaiting_approval'
+                          ? 'border-utility-warning-200 bg-utility-warning-50 text-utility-warning-700'
+                          : p.status === 'failed' || p.status === 'blocked'
+                          ? 'border-utility-error-200 bg-utility-error-50 text-utility-error-700'
+                          : 'border-utility-gray-200 bg-utility-gray-50 text-utility-gray-700'
                       }`}
                     >
                       {p.status}
                     </span>
                   </div>
+                  {p.status === 'awaiting_approval' && (
+                    <p className="text-utility-warning-700">
+                      Not sent onchain — awaiting your approval (over the 50.00 USD
+                      single-transaction limit).
+                    </p>
+                  )}
+                  {p.failureReason && (
+                    <p className="text-utility-error-600">{p.failureReason}</p>
+                  )}
                   <div className="flex items-center justify-between text-tertiary text-[11px]">
                     <span className="font-mono">
                       To: {p.recipient.slice(0, 6)}...{p.recipient.slice(-4)}
                     </span>
-                    <a
-                      href={`https://suiscan.xyz/mainnet/tx/${p.digest}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-xxs text-brand-primary hover:underline font-medium"
-                    >
-                      SuiScan
-                      <ExternalLink className="size-3" />
-                    </a>
+                    {p.digest ? (
+                      <a
+                        href={`https://suiscan.xyz/mainnet/tx/${p.digest}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-xxs text-brand-primary hover:underline font-medium"
+                      >
+                        SuiScan
+                        <ExternalLink className="size-3" />
+                      </a>
+                    ) : (
+                      <span>No onchain digest (not sent)</span>
+                    )}
                   </div>
+                  {p.recipients && p.recipients.length > 1 && (
+                    <div className="text-tertiary text-[11px] space-y-xxs">
+                      <span>Split across {p.recipients.length} recipients:</span>
+                      {p.recipients.map((r, i) => (
+                        <div key={i} className="font-mono">
+                          {r.address.slice(0, 6)}...{r.address.slice(-4)} — $
+                          {r.amountUsd.toFixed(2)} USD
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1185,6 +1414,11 @@ export default function App() {
               </header>
               <div className="min-h-0 flex-1 overflow-y-auto p-xl text-sm text-secondary leading-relaxed">
                 This calls the onchain Sui smart contract to cancel the agent&apos;s spending capability immediately. Once revoked, the agent cannot execute any future automated payments for this wallet until a new allowance is issued.
+                <p className="mt-sm text-utility-warning-700">
+                  Note: revocation is not wired in this build yet — the Move
+                  revoke entry point has not been verified live, so this
+                  request currently returns an honest 501 error.
+                </p>
               </div>
               <footer className="flex justify-end gap-sm border-t border-secondary p-xl">
                 <button

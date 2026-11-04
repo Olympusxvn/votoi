@@ -77,3 +77,39 @@ Sections, top to bottom:
 5. Demo mode: a toggle "Demo script" that walks a judge through the four demo beats in order, highlighting the relevant panel at each step: (1) chat an expense, (2) show the learned fact in Memory, (3) wipe cache and rehydrate from Walrus, (4) pay 0.01 USD through the allowance. Each step is a short sentence with a "Go" button that focuses the panel.
 
 Backend: build the Express routes as thin typed handlers with these exact contracts: POST /api/chat -> { reply }; GET /api/facts -> array above; GET /api/status -> object above; GET /api/payments -> array above; POST /api/test/wipe-cache { userId } -> { wiped: true, factsRestored: number }; POST /api/allowance/build -> { unsignedTxBytes, note }; POST /api/allowance/revoke -> { revoked: true }; POST /api/receipts (multipart upload) -> { queued: true, blobId }. Where the real agent, database, and Sui services plug in, use clearly marked TODO service functions reading only process.env (TATUM_API_KEY, DATABASE_URL). Full TypeScript types, no `any`.
+
+## Prompt 5 - Polish iteration: receipt results, approval display, budget-risk summary, demo beat 5 (frontend only, 2026-11-04)
+
+Instruction first: just run the code. Do not output explanations in the chat window; put any notes as code comments or TODO markers only.
+
+Context: this is a polish iteration on the existing VOTOI web app from Prompt 4 v2 (React + Vite + Express scaffold, dark theme, near-black background, one violet accent, English UI, all money in USD, no emojis anywhere). REUSE everything that already exists: the chat, memory, payments, allowance issue/revoke panels, the receipt dropzone, and the 4-beat demo script. Do NOT regenerate agentPayments.ts, webhook.ts, or suiReads.ts. Never poll any blockchain endpoint on an interval; refresh chain data on user action or after a mutation only.
+
+Hard honesty rules (do not break these):
+- Never claim a receipt has a Walrus blob id. The receipts backend returns blobId null for receipts; receipts are queued locally for OCR, they are not Walrus memory facts.
+- Do not change the revoke contract. POST /api/allowance/revoke honestly returns 501 until the Move revoke entry point is verified live against the gateway. The Revoke button must keep calling that endpoint and must show the real error, never a fake success toast.
+
+Build exactly these four things:
+
+1. Receipt results. After POST /api/receipts returns { queued: true, receiptSha256 }, poll GET /api/receipts/:sha every 3 seconds (local backend status only, not a blockchain endpoint; stop after 60 seconds or on a terminal state) with contract { status: 'queued' | 'processing' | 'done' | 'failed', merchant?: string, amountUsd?: number, error?: string }. Show a spinner line while queued/processing; on done show a card "Receipt read: <merchant> — <amountUsd> USD" with a note that a fact will be learned from it (do not invent the fact text); on failed show an honest "Could not read this receipt" state with a retry upload button. Mark the backend handler with a clear TODO: wire it to the real async OCR worker row; until wired it may keep returning queued.
+
+2. Approval display (display only, no new backend action). Payment items and chat replies may carry status 'needs_approval' when an amount exceeds the 50.00 USD single-transaction limit. Render an amber card: "Over the 50.00 USD single-transaction limit — needs your approval, not sent onchain." Do NOT add an approve/send button: no approval backend exists yet, so nothing may pretend to send it.
+
+3. Budget-risk summary. At the top of the Memory panel, add a "This month's risks" card aggregating the facts with factType budget_risk: a count plus their subjects as a list. Empty state when there are none: "No budget risks recorded."
+
+4. Demo beat 5. Extend the Demo script from 4 beats to 5, keeping beats 1-4 exactly as they are. Beat 5 is: "Upload a receipt and see the read result", focusing the chat panel dropzone, with Next/Restart navigation consistent with the existing beats.
+
+Backend: add only thin, typed Express handlers with the exact contracts above and TODO markers where the real OCR service plugs in. Full TypeScript types, no `any`, loading, empty, and error states on every new element.
+
+## Prompt 5 — Implemented 2026-11-04 by Muse (not AI Builder; Builder turns exhausted)
+
+Implemented directly in src/server.ts + app/src/App.tsx, no Builder credit spent. Deviations from the prompt above, all honesty-driven:
+- Receipt status is a local sidecar JSON file next to the uploaded file, NOT a media_uploads DB row: that table requires walrusBlobId NOT NULL and receipts have none (no Walrus upload for receipts yet). GET /api/receipts/:sha reads the sidecar; unknown sha → 404.
+- The receipt record honestly stays "queued" until a vision provider fills OCR text (workers/asyncOcr.ts owns everything after text exists). Demo beat 5 therefore shows the live queue status, not a read result — nothing is faked.
+- needs_approval was NOT display-only mock: the backend already recorded awaiting_approval rows and returned action payment_needs_approval, but src/server.ts dropped the action. The fix plumbs it through; the amber card has no approve button because no approval backend exists.
+- Revoke untouched: still an honest 501, and the revoke dialog now says so.
+
+## Prompt 6 items — Implemented 2026-11-04 by Muse (borrowed from RecallSpend review, local only, NOT pushed)
+
+1. GET /api/health: { ok, factsCached, walrusBlobsCached, dbStatus, relayerStatus, tatumGateway note }. Counts come from the local cache and are labeled as such; the endpoint never probes the Tatum gateway (no credit burn per call). Live check 2026-11-04: factsCached 12, walrusBlobsCached 12, relayer healthy.
+2. Chat citations: deterministic answer paths (question + expense-with-rule) now return citations [{ subject, blobId }] for exactly the facts used; the LLM path returns none (sources not attributable). Server and UI plumb them through; UI renders "Sources (Walrus)" with short blob + copy. Live check 2026-11-04: "coffee habit" question returned 3 citations matching the quoted facts.
+3. Gateway incident re-verified 2026-11-04 with ONE sui_getChainIdentifier call: still HTTP 404 on the generic gateway URL. Health note updated to that date.
