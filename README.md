@@ -8,6 +8,8 @@ an escrow or a custodial balance.
 Built for the **Walrus x Tatum: Total Recall Hackathon, Track 2: Smart
 Agents for Real Life**.
 
+**Live showcase:** https://votoi-olympusxvns-projects.vercel.app/ (a static page introducing VOTOI, not a live app).
+
 ## Two pillars
 
 **Memory on Walrus Mainnet.** 12 facts, 12 distinct blobs, one namespace per wallet. Walrus is the canonical store; Postgres is only a volatile cache. Wipe the cache and the same facts rebuild from chain. Every deterministic chat answer cites its facts by blob id.
