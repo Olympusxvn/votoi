@@ -1,0 +1,24 @@
+﻿{
+  "standard": "mpp",
+  "recipients": [
+    {
+      "address": "0x3ca8aee71d707b54a3391eac41d622b9ad15b49e32a6bf6b6d7252d005608804",
+      "amountUsd": 0.002
+    },
+    {
+      "address": "0xb33fcc35268837f0ff46a299703f15ab65923717805edfb253295cbee1d1d6e0",
+      "amountUsd": 0.001
+    }
+  ],
+  "totalUsd": 0.003,
+  "totalMist": "3507189",
+  "gasMist": "3064427",
+  "gasUsd": 0.0026,
+  "digest": "7V3xpKNHN7eikyPe8N1LbQfLEhSXYgyx92ZhipYJebJC",
+  "suiscan": "https://suiscan.xyz/mainnet/tx/7V3xpKNHN7eikyPe8N1LbQfLEhSXYgyx92ZhipYJebJC",
+  "transport": "tatum-grpc",
+  "allowanceId": "0x7a8d2e5abf179e66966125acb5796ea3b9649ddd949e8a63200a88c88cae1993",
+  "funder": "0x5dc5f85e4ca400f971f0166cba041bb33a37dadb1d2511b9a87b9150c8b2e1ac",
+  "at": "2026-11-06T03:30:00Z",
+  "note": "One atomic PTB: allowance balance to coin, split in two, remainder coin to first recipient. Gas matches simulation exactly."
+}

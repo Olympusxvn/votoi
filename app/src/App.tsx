@@ -29,11 +29,14 @@ interface FactItem {
 }
 
 interface PaymentItem {
+  paymentId: string;
   recipient: string;
   recipients?: { address: string; amountUsd: number }[];
   amountUsd: number;
+  standard?: string;
   status: string;
   digest: string;
+  transport?: string;
   failureReason?: string;
   timestamp: number;
 }
@@ -46,6 +49,10 @@ interface StatusResponse {
   agentBalanceUsd: number | null;
   relayerStatus: 'healthy' | 'degraded';
   chainReadsUnavailable?: boolean;
+  chainTransport?: { tatumJson: string; tatumGrpc: string; public: string; active: string; checkedAt: number };
+  dream?: { lastMutationAt: string | null; lastRehydratedAt: string | null; walrusFactCount: number | null };
+  memwalAccountId?: string | null;
+  namespace?: string;
 }
 
 interface ChatMessage {
@@ -62,12 +69,32 @@ interface ReceiptDetail {
   merchant: string | null;
   amountUsd: number | null;
   error: string | null;
+  blobId?: string | null;
+  vaultError?: string | null;
 }
 
 interface ToastMessage {
   id: string;
   type: 'success' | 'error' | 'info';
   text: string;
+}
+
+interface BillItem {
+  billId: string;
+  payeeName: string;
+  recipient: string;
+  amountUsd: number;
+  frequency: string;
+  nextDueAt: number;
+  status: string;
+  lastDigest: string;
+  lastError: string;
+}
+
+interface FactHistoryItem {
+  revision: number;
+  serialized: string;
+  blobId: string | null;
 }
 
 export default function App() {
@@ -202,6 +229,7 @@ export default function App() {
     loadStatus(userId);
     loadFacts(userId);
     loadPayments(userId);
+    loadBills(userId);
   }, [userId]);
 
   const handleSendChat = async (textToSend?: string) => {
@@ -386,25 +414,184 @@ export default function App() {
   const handleRevokeAllowance = async () => {
     if (!status?.allowanceId) return;
     setIsRevoking(true);
+    setRevokeResult(null);
     try {
       const res = await fetch('/api/allowance/revoke', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,
-          allowanceCapId: status.allowanceId,
+          allowanceId: status.allowanceId,
         }),
       });
-      if (!res.ok) throw new Error('Failed to revoke allowance');
-      await res.json();
-      setShowRevokeConfirm(false);
-      addToast('Allowance revoked successfully onchain', 'success');
-      loadStatus(userId);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Failed to build revocation');
+      setRevokeResult(data);
+      addToast('Unsigned revocation built — sign it with the funder wallet', 'success');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Revoke error';
       addToast(msg, 'error');
     } finally {
       setIsRevoking(false);
+    }
+  };
+
+  const loadBills = async (user: string) => {
+    setBillsLoading(true);
+    try {
+      const res = await fetch('/api/bills?userId=' + encodeURIComponent(user));
+      if (!res.ok) throw new Error('Failed to load bills');
+      const data = await res.json();
+      setBills(data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error loading bills';
+      addToast(msg, 'error');
+    } finally {
+      setBillsLoading(false);
+    }
+  };
+
+  const handleBillsRun = async () => {
+    try {
+      const res = await fetch('/api/bills/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Bill run failed');
+      const results = data.results ?? [];
+      const settled = results.filter((b: { status: string }) => b.status === 'settled').length;
+      addToast('Bill pass done: ' + settled + ' of ' + results.length + ' settled', settled > 0 ? 'success' : 'info');
+      loadBills(userId);
+      loadPayments(userId);
+      loadStatus(userId);
+    } catch (err: unknown) {
+      addToast(err instanceof Error ? err.message : 'Bill run error', 'error');
+    }
+  };
+
+  const handleCreateBill = async () => {
+    if (!billForm.payeeName.trim() || !billForm.recipient.trim() || !billForm.amountUsd) {
+      addToast('Fill payee, recipient and amount first', 'error');
+      return;
+    }
+    setIsCreatingBill(true);
+    try {
+      const res = await fetch('/api/bills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          payeeName: billForm.payeeName.trim(),
+          recipient: billForm.recipient.trim(),
+          amountUsd: parseFloat(billForm.amountUsd),
+          frequency: 'once',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? 'Create bill failed');
+      setBillForm({ payeeName: '', recipient: '', amountUsd: '' });
+      addToast('Bill scheduled — press Run due now to settle it', 'success');
+      loadBills(userId);
+    } catch (err: unknown) {
+      addToast(err instanceof Error ? err.message : 'Create bill error', 'error');
+    } finally {
+      setIsCreatingBill(false);
+    }
+  };
+
+  const handleApproveBuild = async (paymentId: string) => {
+    setApproveFor(paymentId);
+    setApproveBuild(null);
+    setApproveDigest('');
+    setApproveBusy(true);
+    try {
+      const res = await fetch('/api/payments/approve-build', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Approve build failed');
+      setApproveBuild(data);
+    } catch (err: unknown) {
+      addToast(err instanceof Error ? err.message : 'Approve build error', 'error');
+      setApproveFor(null);
+    } finally {
+      setApproveBusy(false);
+    }
+  };
+
+  const handleApproveConfirm = async (paymentId: string) => {
+    if (!approveDigest.trim()) {
+      addToast('Paste the release digest first', 'error');
+      return;
+    }
+    setApproveBusy(true);
+    try {
+      const res = await fetch('/api/payments/approve-confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentId, digest: approveDigest.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Approve confirm failed');
+      if (data.settled) {
+        addToast('Payment released and settled onchain', 'success');
+        setApproveFor(null);
+        setApproveBuild(null);
+        loadPayments(userId);
+        loadStatus(userId);
+      } else if (data.pending) {
+        addToast('Digest not found yet — try again shortly', 'info');
+      } else {
+        addToast('Release failed onchain — see ledger', 'error');
+        setApproveFor(null);
+        loadPayments(userId);
+      }
+    } catch (err: unknown) {
+      addToast(err instanceof Error ? err.message : 'Approve confirm error', 'error');
+    } finally {
+      setApproveBusy(false);
+    }
+  };
+
+  const loadFactHistory = async (fact: FactItem) => {
+    const key = fact.factType + ':' + fact.subject;
+    if (historyFor === key) {
+      setHistoryFor(null);
+      return;
+    }
+    setHistoryFor(key);
+    setHistoryItems([]);
+    setHistoryLoading(true);
+    try {
+      const res = await fetch('/api/facts/history?userId=' + encodeURIComponent(userId) + '&factType=' + encodeURIComponent(fact.factType) + '&subject=' + encodeURIComponent(fact.subject));
+      if (!res.ok) throw new Error('Failed to load history');
+      setHistoryItems(await res.json());
+    } catch (err: unknown) {
+      addToast(err instanceof Error ? err.message : 'History error', 'error');
+      setHistoryFor(null);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleDreamRun = async () => {
+    setIsDreaming(true);
+    try {
+      const res = await fetch('/api/dream/run', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Dream failed');
+      const mutated = (data.dream?.users ?? []).reduce((s: number, u: { merchantsMutated: number }) => s + u.merchantsMutated, 0);
+      addToast('Dream pass done: ' + mutated + ' habits mutated, OCR drained', 'success');
+      loadFacts(userId);
+      loadStatus(userId);
+    } catch (err: unknown) {
+      addToast(err instanceof Error ? err.message : 'Dream error', 'error');
+    } finally {
+      setIsDreaming(false);
     }
   };
 
@@ -487,7 +674,7 @@ export default function App() {
               </span>
               <span className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-xxs text-xs font-medium text-utility-brand-700">
                 <Cpu className="size-3 shrink-0" />
-                RPC: Tatum Sui Gateway
+                RPC: {status?.chainTransport?.active === 'public' ? 'Public Sui gRPC (fallback)' : status?.chainTransport?.active === 'tatum' ? 'Tatum JSON-RPC' : 'Tatum gRPC'}
               </span>
               <span className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-xxs text-xs font-medium text-utility-brand-700">
                 <Lock className="size-3 shrink-0" />
@@ -599,6 +786,7 @@ export default function App() {
                 loadStatus(userId);
                 loadFacts(userId);
                 loadPayments(userId);
+                loadBills(userId);
                 addToast('Data refreshed', 'info');
               }}
               className="inline-flex items-center gap-xs rounded-lg bg-primary px-md py-xs text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring transition-colors"
@@ -739,8 +927,8 @@ export default function App() {
                 {m.role === 'agent' && m.action === 'payment_needs_approval' && (
                   <div className="max-w-[88%] mt-xs rounded-lg border border-utility-warning-200 bg-utility-warning-50 p-md text-xs text-utility-warning-700">
                     Over the 50.00 USD single-transaction limit — needs your
-                    approval, not sent onchain. No approval action exists yet,
-                    so nothing was sent.
+                    approval, not sent onchain. Approve and release it from
+                    the Payments panel below.
                   </div>
                 )}
                 {m.role === 'agent' && m.citations && m.citations.length > 0 && (
@@ -849,7 +1037,18 @@ export default function App() {
               )}
               {(receiptDetail.status === 'queued' ||
                 receiptDetail.status === 'processing') && (
-                <span>Receipt in OCR queue — status updates here when text is extracted.</span>
+                <span>
+                  Receipt in OCR queue — status updates here when text is extracted.
+                  {receiptDetail.blobId && (
+                    <>
+                      {' '}Vault blob:{' '}
+                      <a href={'https://aggregator.walrus-mainnet.walrus.space/v1/blobs/' + receiptDetail.blobId} target="_blank" rel="noreferrer" className="underline font-mono">
+                        {receiptDetail.blobId.slice(0, 10)}...
+                      </a>
+                    </>
+                  )}
+                  {receiptDetail.vaultError && <> Vault: {receiptDetail.vaultError}</>}
+                </span>
               )}
               {(receiptDetail.status === 'failed' ||
                 receiptDetail.status === 'timeout') && (
@@ -898,13 +1097,22 @@ export default function App() {
               <Database className="size-4 shrink-0 text-fg-brand-primary" />
               <h2 className="text-sm font-semibold text-primary">What VOTOI remembers</h2>
             </div>
-            <button
-              onClick={() => setShowWipeConfirm(true)}
-              disabled={isWiping}
-              className="inline-flex items-center gap-sm rounded-lg bg-primary px-md py-xs text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-            >
-              Wipe cache & rehydrate
-            </button>
+            <div className="flex items-center gap-xs">
+              <button
+                onClick={handleDreamRun}
+                disabled={isDreaming}
+                className="inline-flex items-center gap-sm rounded-lg bg-primary px-md py-xs text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50"
+              >
+                {isDreaming ? 'Dreaming...' : 'Run dream pass'}
+              </button>
+              <button
+                onClick={() => setShowWipeConfirm(true)}
+                disabled={isWiping}
+                className="inline-flex items-center gap-sm rounded-lg bg-primary px-md py-xs text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                Wipe cache & rehydrate
+              </button>
+            </div>
           </div>
 
           <div className="flex-1 py-md overflow-y-auto space-y-md">
@@ -919,6 +1127,18 @@ export default function App() {
                 <span>
                   Relayer: {status?.relayerStatus ?? 'unknown'}
                 </span>
+                <span>
+                  Dream: {status?.dream?.lastMutationAt ? new Date(status.dream.lastMutationAt).toLocaleString() : 'never'}
+                </span>
+                {status?.namespace && (
+                  <span className="font-mono">ns: {status.namespace.slice(0, 18)}...</span>
+                )}
+                {status?.memwalAccountId && (
+                  <a href={'https://suiscan.xyz/mainnet/object/' + status.memwalAccountId} target="_blank" rel="noreferrer" className="inline-flex items-center gap-xxs text-brand-primary hover:underline font-medium">
+                    MemWalAccount
+                    <ExternalLink className="size-3" />
+                  </a>
+                )}
               </div>
             )}
 
@@ -994,7 +1214,9 @@ export default function App() {
                 </p>
                 <p className="text-xs text-secondary">{spendingProfileFact.rule}</p>
                 <div className="pt-xs border-t border-utility-brand-200 flex items-center justify-between text-xs font-mono text-tertiary">
-                  <span>Walrus: {spendingProfileFact.walrusBlobId.slice(0, 10)}...</span>
+                  <a href={'https://aggregator.walrus-mainnet.walrus.space/v1/blobs/' + spendingProfileFact.walrusBlobId} target="_blank" rel="noreferrer" className="hover:underline">
+                    Walrus: {spendingProfileFact.walrusBlobId.slice(0, 10)}...
+                  </a>
                   <div className="relative group inline-block">
                     <button
                       onClick={() =>
@@ -1049,7 +1271,12 @@ export default function App() {
                   <p className="text-xs text-secondary">{fact.pattern}</p>
                   <p className="text-xs text-tertiary italic">{fact.rule}</p>
                   <div className="pt-xs border-t border-secondary flex items-center justify-between text-[11px] font-mono text-tertiary">
-                    <span>Blob: {fact.walrusBlobId.slice(0, 10)}...</span>
+                    <a href={'https://aggregator.walrus-mainnet.walrus.space/v1/blobs/' + fact.walrusBlobId} target="_blank" rel="noreferrer" className="hover:underline">
+                      Blob: {fact.walrusBlobId.slice(0, 10)}...
+                    </a>
+                    <button onClick={() => loadFactHistory(fact)} className="font-sans text-brand-primary hover:underline font-medium">
+                      {historyFor === fact.factType + ':' + fact.subject ? 'Hide history' : 'History'}
+                    </button>
                     <div className="relative group inline-block">
                       <button
                         onClick={() => copyToClipboard(fact.walrusBlobId, `fact-${idx}`)}
@@ -1069,6 +1296,21 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+                  {historyFor === fact.factType + ':' + fact.subject && (
+                    <div className="pt-xs border-t border-secondary text-[11px] space-y-xxs">
+                      {historyLoading ? (
+                        <span className="text-tertiary">Loading revisions from Walrus...</span>
+                      ) : historyItems.length === 0 ? (
+                        <span className="text-tertiary">No older revisions found.</span>
+                      ) : (
+                        historyItems.map((h) => (
+                          <div key={h.revision} className="font-mono text-tertiary">
+                            rev #{h.revision}: {h.serialized.slice(0, 90)}...
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1238,6 +1480,78 @@ export default function App() {
               )}
             </div>
 
+            {/* Scheduled Bills */}
+            <div className="rounded-xl border border-secondary bg-secondary p-xl shadow-xs space-y-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-secondary uppercase tracking-wider block">
+                  Scheduled Bills
+                </span>
+                <button
+                  onClick={handleBillsRun}
+                  className="inline-flex items-center gap-xs rounded-lg bg-primary px-md py-xs text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover"
+                >
+                  Run due now
+                </button>
+              </div>
+              {billsLoading && (
+                <div className="h-10 w-full animate-pulse rounded-xs bg-tertiary" />
+              )}
+              {!billsLoading && bills.length === 0 && (
+                <p className="text-xs text-tertiary text-center py-xs">No bills scheduled.</p>
+              )}
+              {bills.map((b) => (
+                <div key={b.billId} className="rounded-lg border border-secondary bg-primary p-md text-xs space-y-xxs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-primary">{b.payeeName} — {b.amountUsd < 0.1 ? b.amountUsd.toFixed(4) : b.amountUsd.toFixed(2)} USD</span>
+                    <span className="text-tertiary">{b.status} · {b.frequency}</span>
+                  </div>
+                  <div className="text-tertiary text-[11px] font-mono">
+                    To: {b.recipient.slice(0, 6)}...{b.recipient.slice(-4)} · due {new Date(b.nextDueAt).toLocaleString()}
+                  </div>
+                  {b.lastDigest ? (
+                    <a href={'https://suiscan.xyz/mainnet/tx/' + b.lastDigest} target="_blank" rel="noreferrer" className="inline-flex items-center gap-xxs text-brand-primary hover:underline font-medium text-[11px]">
+                      Last settlement
+                      <ExternalLink className="size-3" />
+                    </a>
+                  ) : b.lastError ? (
+                    <p className="text-utility-error-600 text-[11px]">{b.lastError}</p>
+                  ) : null}
+                </div>
+              ))}
+              <div className="space-y-xs border-t border-secondary pt-sm">
+                <input
+                  type="text"
+                  value={billForm.payeeName}
+                  onChange={(e) => setBillForm({ ...billForm, payeeName: e.target.value })}
+                  placeholder="Payee name (e.g. Demo CDN bill)"
+                  className="w-full rounded-md bg-primary px-md py-xs text-xs text-primary placeholder:text-placeholder border border-primary"
+                />
+                <input
+                  type="text"
+                  value={billForm.recipient}
+                  onChange={(e) => setBillForm({ ...billForm, recipient: e.target.value })}
+                  placeholder="Recipient Sui address (0x...)"
+                  className="w-full rounded-md bg-primary px-md py-xs text-xs font-mono text-primary placeholder:text-placeholder border border-primary"
+                />
+                <div className="flex gap-xs">
+                  <input
+                    type="number"
+                    value={billForm.amountUsd}
+                    onChange={(e) => setBillForm({ ...billForm, amountUsd: e.target.value })}
+                    placeholder="0.00"
+                    className="flex-1 rounded-md bg-primary px-md py-xs text-xs text-primary placeholder:text-placeholder border border-primary"
+                  />
+                  <button
+                    onClick={handleCreateBill}
+                    disabled={isCreatingBill}
+                    className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-md py-xs text-xs font-semibold text-primary-on-brand disabled:opacity-50"
+                  >
+                    {isCreatingBill ? 'Adding...' : 'Add bill'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* Payment History List */}
             <div className="space-y-xs">
               <span className="text-xs font-semibold text-secondary uppercase tracking-wider block">
@@ -1284,13 +1598,71 @@ export default function App() {
                     </span>
                   </div>
                   {p.status === 'awaiting_approval' && (
-                    <p className="text-utility-warning-700">
-                      Not sent onchain — awaiting your approval (over the 50.00 USD
-                      single-transaction limit).
-                    </p>
+                    <div className="space-y-xs">
+                      <p className="text-utility-warning-700">
+                        Not sent onchain — awaiting your approval (over the 50.00 USD
+                        single-transaction limit).
+                      </p>
+                      {approveFor !== p.paymentId ? (
+                        <button
+                          onClick={() => handleApproveBuild(p.paymentId)}
+                          disabled={approveBusy}
+                          className="inline-flex items-center gap-sm rounded-lg bg-primary px-md py-xs text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover disabled:opacity-50"
+                        >
+                          Build approval transaction
+                        </button>
+                      ) : (
+                        <div className="space-y-xs rounded-md border border-utility-warning-200 bg-primary p-sm">
+                          {approveBuild ? (
+                            <>
+                              <p className="text-secondary">
+                                Sign these bytes with the funder wallet (est. fee {approveBuild.gasEstimateUsd} USD via {approveBuild.transport}):
+                              </p>
+                              <div className="font-mono break-all text-tertiary">{approveBuild.unsignedTxBase64.slice(0, 48)}...</div>
+                              <button
+                                onClick={() => copyToClipboard(approveBuild.unsignedTxBase64, 'approve-' + p.paymentId)}
+                                className="text-brand-primary hover:underline font-medium"
+                              >
+                                Copy unsigned bytes
+                              </button>
+                              <input
+                                type="text"
+                                value={approveDigest}
+                                onChange={(e) => setApproveDigest(e.target.value)}
+                                placeholder="Paste release digest after signing"
+                                className="w-full rounded-md bg-primary px-md py-xs text-xs font-mono text-primary placeholder:text-placeholder border border-primary"
+                              />
+                              <button
+                                onClick={() => handleApproveConfirm(p.paymentId)}
+                                disabled={approveBusy || !approveDigest.trim()}
+                                className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-md py-xs text-xs font-semibold text-primary-on-brand disabled:opacity-50"
+                              >
+                                Confirm release
+                              </button>
+                            </>
+                          ) : (
+                            <span className="text-tertiary">Building unsigned transaction...</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   )}
                   {p.failureReason && (
                     <p className="text-utility-error-600">{p.failureReason}</p>
+                  )}
+                  {(p.standard || p.transport) && (
+                    <div className="flex items-center gap-xs text-[11px]">
+                      {p.standard && (
+                        <span className="inline-flex items-center rounded-full border border-utility-gray-200 bg-utility-gray-50 px-md py-xxs font-medium text-utility-gray-700">
+                          {p.standard}
+                        </span>
+                      )}
+                      {p.transport && (
+                        <span className="inline-flex items-center rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-xxs font-medium text-utility-brand-700">
+                          via {p.transport}
+                        </span>
+                      )}
+                    </div>
                   )}
                   <div className="flex items-center justify-between text-tertiary text-[11px]">
                     <span className="font-mono">
@@ -1412,13 +1784,24 @@ export default function App() {
                   <X className="size-4" />
                 </button>
               </header>
-              <div className="min-h-0 flex-1 overflow-y-auto p-xl text-sm text-secondary leading-relaxed">
-                This calls the onchain Sui smart contract to cancel the agent&apos;s spending capability immediately. Once revoked, the agent cannot execute any future automated payments for this wallet until a new allowance is issued.
-                <p className="mt-sm text-utility-warning-700">
-                  Note: revocation is not wired in this build yet — the Move
-                  revoke entry point has not been verified live, so this
-                  request currently returns an honest 501 error.
+              <div className="min-h-0 flex-1 overflow-y-auto p-xl text-sm text-secondary leading-relaxed space-y-sm">
+                <p>
+                  This builds an unsigned revocation transaction calling the onchain 0x2::allowance::revoke entry. Sign it with the funder wallet to cancel the agent&apos;s spending capability immediately.
                 </p>
+                {revokeResult ? (
+                  <div className="rounded-md border border-secondary bg-secondary p-md text-xs space-y-xs">
+                    <p>Cap: <span className="font-mono">{revokeResult.capId.slice(0, 12)}...</span> via {revokeResult.transport}</p>
+                    <div className="font-mono break-all text-tertiary">{revokeResult.unsignedTxBase64.slice(0, 48)}...</div>
+                    <button
+                      onClick={() => copyToClipboard(revokeResult.unsignedTxBase64, 'revoke-bytes')}
+                      className="text-brand-primary hover:underline font-medium"
+                    >
+                      Copy unsigned bytes
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-tertiary text-xs">Press Confirm to build the unsigned transaction (nothing is sent by the app).</p>
+                )}
               </div>
               <footer className="flex justify-end gap-sm border-t border-secondary p-xl">
                 <button

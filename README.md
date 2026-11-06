@@ -12,7 +12,7 @@ Agents for Real Life**.
 
 **Memory on Walrus Mainnet.** 12 facts, 12 distinct blobs, one namespace per wallet. Walrus is the canonical store; Postgres is only a volatile cache. Wipe the cache and the same facts rebuild from chain. Every deterministic chat answer cites its facts by blob id.
 
-**Payments via Sui allowances, x402-style.** The agent never holds your funds: it spends from a native Sui allowance in one atomic PTB, spender pays gas, capped at 50.00 USD with over-limit payments recorded as `awaiting_approval` and never sent. Settled proof: 0.01 USD paid from chat ([Suiscan](https://suiscan.xyz/mainnet/tx/BDFfAHCMFFNnk5ERmBxqndZvin7NTTXXxPHJgUsFudrh)).
+**Payments via Sui allowances, x402-style.** The agent never holds your funds: it spends from a native Sui allowance in one atomic PTB, spender pays gas, capped at 50.00 USD with over-limit payments recorded as `awaiting_approval` and never sent. Settled proof: 0.01 USD paid from chat ([Suiscan](https://suiscan.xyz/mainnet/tx/BDFfAHCMFFNnk5ERmBxqndZvin7NTTXXxPHJgUsFudrh)). MPP proof: 0.003 USD split to 2 recipients in one atomic PTB ([Suiscan](https://suiscan.xyz/mainnet/tx/7V3xpKNHN7eikyPe8N1LbQfLEhSXYgyx92ZhipYJebJC)), settled via Tatum gRPC on Nov 6.
 
 
 ## Verify it in 60 seconds
@@ -30,6 +30,8 @@ check that runs in under a minute:
 3. **Payments are real.** A chat payment of 0.01 USD settled through the
    production allowance:
    [Suiscan transaction](https://suiscan.xyz/mainnet/tx/BDFfAHCMFFNnk5ERmBxqndZvin7NTTXXxPHJgUsFudrh).
+   A 0.003 USD two-recipient MPP split settled the same way on Nov 6:
+   [Suiscan transaction](https://suiscan.xyz/mainnet/tx/7V3xpKNHN7eikyPe8N1LbQfLEhSXYgyx92ZhipYJebJC).
 4. **Answers cite their sources.** Ask "What do you know about my coffee
    habit?" and the reply lists the exact facts used, each with its Walrus
    blob id. Citations appear only when the answer's sources are known
@@ -62,7 +64,7 @@ check that runs in under a minute:
 |---|---|
 | 12 facts on Walrus Memory Mainnet | `GET /api/health`, Nov 4, 2026: 12 facts cached, 12 distinct blobs |
 | Memory is the source of truth, not the cache | Wipe-cache rehydrate restores the same facts from Walrus |
-| Agent paid through an allowance | Settled 0.01 USD chat payment, digest linked above |
+| Agent paid through an allowance | Settled 0.01 USD chat payment + 0.003 USD MPP split (2 recipients, 1 PTB), digests linked above |
 | Production allowance | `0x7a8d2e5abf179e66966125acb5796ea3b9649ddd949e8a63200a88c88cae1993` |
 | Over-limit payments are never auto-sent | `awaiting_approval` rows in `GET /api/payments`, amber card in chat |
 | Every answer is checkable | Chat citations carry subject plus Walrus blob id |
@@ -119,8 +121,9 @@ Walrus Memory Mainnet (canonical, via @mysten-incubation/memwal)
    agent's spender address, with onchain lifetime and rate limits.
 2. The agent spends in one atomic PTB: balance from the allowance,
    converted to a coin, split to the recipients. The spender pays gas.
-3. The funder revokes anytime via the allowance cap (see Limitations
-   for the current status of the revoke endpoint).
+3. The funder revokes anytime via the allowance cap:
+   `POST /api/allowance/revoke` returns the unsigned revocation PTB
+   (`0x2::allowance::revoke`, verified live) for the funder wallet.
 4. Safety is enforced twice: the onchain allowance limits, and the
    code path that refuses over-cap spends (chat records them as
    `awaiting_approval`; the payment service throws
@@ -128,7 +131,8 @@ Walrus Memory Mainnet (canonical, via @mysten-incubation/memwal)
 
 See `src/services/agentPayments.ts` for the production path
 (`buildIssueAllowanceTx`, `spendFromAllowance`, USD cap check, dry-run
-gate). Chain reads go through the Tatum hosted gateway RPC. Tatum
+gate). Chain calls go through the active transport: Tatum native gRPC
+first, public Sui gRPC + GraphQL fallback (`src/config/chainTransport.ts`). Tatum
 Notifications does not support Sui, so payment confirmation uses RPC
 transaction-status checks instead of webhooks.
 
@@ -158,9 +162,13 @@ transaction-status checks instead of webhooks.
 | `GET /api/payments` | Payment ledger, including split recipients and `awaiting_approval` rows |
 | `POST /api/test/wipe-cache` | Wipe cache, then immediately rehydrate from Walrus |
 | `POST /api/allowance/build` | Build a real unsigned allowance-issuance transaction |
-| `POST /api/allowance/revoke` | Intentionally `501` (see Limitations) |
-| `POST /api/receipts` | Accept a receipt upload, queued locally (see Limitations) |
+| `POST /api/allowance/revoke` | Unsigned revocation PTB for the funder wallet |
+| `POST /api/receipts` | Accept a receipt upload; raw file vaults to Walrus in the background (OCR text still outstanding) |
 | `GET /api/receipts/:sha` | Live queue status for one uploaded receipt |
+| `GET /api/facts/history` | Every Walrus revision of one fact slot |
+| `GET/POST /api/bills`, `POST /api/bills/run` | Autonomous bill scheduling and settlement |
+| `POST /api/dream/run` | One learning pass now (compaction + OCR drain) |
+| `POST /api/payments/approve-build` / `approve-confirm` | Human release of an over-cap payment |
 
 ## Prize mapping
 
@@ -168,7 +176,7 @@ transaction-status checks instead of webhooks.
 |---|---|
 | Best Walrus Memory | Walrus is the canonical store, not a cache: 12 facts, per-user namespaces, append-only revisions, wipe-cache rehydrate proof, blob ids on every fact |
 | Best Tatum AI Builder App | The UI scaffold and early service modules were generated with Tatum AI Builder prompts (`docs/ai-builder-prompts.md`); the demo server then replaced every mock route with real services, so no demo value is faked |
-| Best Use of Agent Payments | Native Sui allowances with onchain limits, one atomic PTB per spend, spender-paid gas, 50.00 USD auto-pay cap with `awaiting_approval`, and a settled onchain payment to prove it |
+| Best Use of Agent Payments | Native Sui allowances with onchain limits, one atomic PTB per spend, spender-paid gas, 50.00 USD auto-pay cap with `awaiting_approval`, and settled onchain payments to prove it (0.01 USD single + 0.003 USD MPP split) |
 
 ## Run locally
 
@@ -190,28 +198,35 @@ address to drive every panel.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `TATUM_API_KEY` | Yes | Tatum Sui gateway RPC |
+| `TATUM_API_KEY` | Yes | Tatum Sui gateways (gRPC primary + Data APIs) |
+| `TATUM_SUI_GRPC_HOST` | No | Tatum native gRPC host (primary transport) |
 | `MEMWAL_ACCOUNT_ID` | Yes | Walrus Memory account |
 | `MEMWAL_PRIVATE_KEY` | Yes | MemWal delegate key (server only) |
 | `DATABASE_URL` | Yes | Neon Postgres connection |
 | `SUI_NETWORK` | No | `mainnet` or `testnet` (defaults derive the rest) |
-| `TATUM_SUI_RPC_URL` | No | Gateway URL override |
+| `TATUM_SUI_RPC_URL` | No | Legacy JSON-RPC gateway URL override |
+| `SUI_PUBLIC_GRPC_URL`, `SUI_GRAPHQL_URL` | No | Public fallback endpoints |
 | `SUI_USD_RATE` | No | SUI/USD rate override |
 | `VOTOI_AGENT_SUI_ADDRESS` | No | Dedicated agent wallet shown in status |
 | `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | No | Chat model configuration |
+| `WALRUS_PUBLISHER_URL`, `WALRUS_AGGREGATOR_URL` | No | Receipt vault endpoints |
+| `COMPACTION_INTERVAL_MS`, `BILLPAY_AUTO_RUN` | No | Dream schedule (default 10 min, bills on) |
 
 ## Honest limitations
 
-- **Revoke is `501` by design.** The revoke Move signature could not be
-  verified live, so the endpoint refuses rather than fake a revocation.
-- **Receipts queue locally.** `POST /api/receipts` stores the upload and
-  returns its SHA-256; Walrus blob upload for receipts and the OCR vision
-  provider are still outstanding, so no blob id is claimed for receipts.
+- **Revoke needs the funder wallet.** `0x2::allowance::revoke` was
+  verified live (build + simulate green); the endpoint returns the
+  unsigned PTB because only the funder can sign a revocation.
+- **Receipt OCR text is still outstanding.** Raw receipt files now vault
+  to Walrus blobs (id on the receipt status), but the OCR vision
+  provider is not wired, so merchant and amount stay null until text
+  exists.
 - **Gateway incident, stated plainly.** As of Nov 4, 2026, the generic
-  Tatum gateway returns HTTP 404 for Sui methods with this project's key
-  (re-verified with a single call that day). Panels do not fail on it:
-  `/api/status` reports `chainReadsUnavailable` and spent totals come
-  from the local ledger.
+  Tatum JSON-RPC gateway returns HTTP 404 for Sui methods with this
+  project's key (still true Nov 6). Chain traffic runs on the Tatum
+  native gRPC gateway instead, with a public fallback. If every
+  transport is down, `/api/status` reports `chainReadsUnavailable` and
+  spent totals come from the local ledger.
 - **Memory is append-only.** Corrections land as newer revisions; old
   facts are never deleted from Walrus.
 

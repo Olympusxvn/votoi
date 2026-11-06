@@ -12,9 +12,11 @@
   "type": "module",
   "version": "0.1.0",
   "dependencies": {
+    "@grpc/grpc-js": "^1.14.7",
     "@mysten-incubation/memwal": "^0.1.8",
     "@mysten/sui": "^2.37.0",
     "@neondatabase/serverless": "^1.2.0",
+    "@protobuf-ts/grpc-transport": "^2.11.1",
     "@vitejs/plugin-react": "^6.1.2",
     "autoprefixer": "^10.6.1",
     "drizzle-orm": "^0.45.4",

@@ -29,21 +29,22 @@ The frontend already has a Demo Mode walkthrough bar (4 beats); follow it.
 - Beat 3, 1:30-2:10 (wipe-cache): press wipe-cache, show the cache
   empty, then all 12 facts restored from Walrus. This is the strongest
   beat — linger on the restored count.
-- Beat 4, 2:10-2:50 (payments, HONEST version): press allowance build
-  and show the real unsigned transaction; open the payments panel and
-  show the settled 0.01 USD payment from 2026-10-21 (label its date on
-  screen or in voiceover). Say plainly: "Live pay execution currently
-  waits on a Tatum gateway outage; the settlement above is the same
-  allowance flow executed onchain on Oct 21." Never show a fake
-  success, never claim a live payment that did not execute.
+- Beat 4, 2:10-2:50 (payments): press allowance build and show the
+  real unsigned transaction; open the payments panel and show the
+  settled 0.01 USD payment (Oct 21) and the settled 0.003 USD
+  two-recipient MPP split (Nov 6, digest 7V3xpKNHN7eikyPe8N1LbQfLEhSXYgyx92ZhipYJebJC on screen).
+  Optional live beat: one "pay 0.001 USD" chat command executes
+  onchain through Tatum gRPC - only if the funder balance covers it
+  that day. Never show a fake success.
 - 2:50-3:00 Outro: repo link + "try it" line.
 
-## If the gateway recovers before Nov 10
-Re-record Beat 4 only, with a live "pay 0.01 USD" chat command executing
-onchain, and splice it in. Do not re-record the whole video.
+## Gateway status (updated Nov 6)
+The JSON-RPC gateway still 404s, but the Tatum native gRPC gateway
+works and the MPP split above settled through it. No re-record needed
+unless you want the optional live micro-pay beat.
 
 ## Do NOT show or claim
-- No fake digests, blob ids, or "revoked" states (the app refuses to fake
-  these by design: revoke is 501, receipts queue without a blob id).
-- No live-pay claim while the gateway returns 404 / -16500.
+- No fake digests, blob ids, or "revoked" states (revoke returns
+  unsigned bytes for the funder wallet; receipts vault before OCR text).
+- No live-pay claim beyond what the funder balance covers that day.
 - No .env, private keys, or Tatum dashboard key values on screen.

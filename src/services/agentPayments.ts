@@ -1,9 +1,10 @@
-// Generated with Tatum AI Builder (ai.tatum.io) on 2026-10-21 from the project prompt set
+﻿// Generated with Tatum AI Builder (ai.tatum.io) on 2026-10-21 from the project prompt set
 // (docs/ai-builder-prompts.md, Prompt 1 v1). Reviewed and integrated into VOTOI.
 // Allowance-based spend path (Prompt 1 v2 design) is added separately in this repo.
+// 2026-11-06: spend path runs through config/chainTransport (Tatum gRPC first,
+// public fallback), so payments survive the Tatum JSON-RPC gateway outage.
 import {
   SuiJsonRpcClient,
-  JsonRpcHTTPTransport,
   type DryRunTransactionBlockResponse,
   type TransactionEffects,
   type BalanceChange,
@@ -12,8 +13,16 @@ import { Transaction } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { isValidSuiAddress } from '@mysten/sui/utils';
 import { toBase64 } from '@mysten/bcs';
+import {
+  chainOpsForLegacy,
+  getChainOps,
+  getLegacyTatumClient as getTatumSuiClient,
+  graphqlTxStatus,
+  type ChainOps,
+  type ChainTransportName,
+} from "../config/chainTransport";
 
-export const TATUM_SUI_GATEWAY_URL = 'https://sui-mainnet.gateway.tatum.io';
+export { getTatumSuiClient };
 export const SPLIT_PAYMENT_USD_CAP = 50.0;
 
 export class HumanApprovalRequired extends Error {
@@ -130,41 +139,6 @@ export interface BuildSponsoredSplitPaymentResult {
 export interface ExecuteSplitPaymentOptions {
   client?: SuiJsonRpcClient;
   requestType?: 'WaitForEffectsCert' | 'WaitForLocalExecution';
-}
-
-/** fetch wrapper that rides out Tatum gateway rate limits (HTTP 429) and
- *  transient 5xx with exponential backoff - the free plan throttles the
- *  burst of RPC calls a transaction build makes. */
-const fetchWithBackoff: typeof fetch = async (input, init) => {
-  const delays = [1000, 2000, 4000, 8000];
-  let last: Response | undefined;
-  for (let attempt = 0; attempt <= delays.length; attempt++) {
-    last = await fetch(input, init);
-    if (last.status !== 429 && last.status < 500) return last;
-    if (attempt < delays.length) {
-      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
-    }
-  }
-  return last as Response;
-};
-
-export function getTatumSuiClient(apiKey?: string): SuiJsonRpcClient {
-  const key = apiKey ?? process.env.TATUM_API_KEY;
-  const headers: Record<string, string> = {};
-  if (key) {
-    headers['x-api-key'] = key;
-  }
-  const transport = new JsonRpcHTTPTransport({
-    url: TATUM_SUI_GATEWAY_URL,
-    fetch: fetchWithBackoff,
-    rpc: {
-      headers,
-    },
-  });
-  return new SuiJsonRpcClient({
-    transport,
-    network: 'mainnet',
-  });
 }
 
 function validateAddress(address: string, field: string): void {
@@ -389,17 +363,17 @@ export function getAgentSpenderAddress(): string {
   return getAgentSpenderKeypair().toSuiAddress();
 }
 
-/** Building a PTB through the gateway fires several resolver RPCs at
- *  once; a failed build is read-only, so retry it with backoff. Sending
- *  is never retried blindly: execution happens exactly once. */
+/** Building a PTB fires several resolver RPCs at once; a failed build is
+ *  read-only, so retry it with backoff. Sending is never retried blindly:
+ *  execution happens exactly once. */
 async function buildWithRetry(
-  client: SuiJsonRpcClient,
+  ops: ChainOps,
   tx: Transaction
 ): Promise<Uint8Array> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      return await tx.build({ client });
+      return await ops.buildTx(tx);
     } catch (err) {
       lastErr = err;
       await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
@@ -449,6 +423,30 @@ export function buildIssueAllowanceTx(params: IssueAllowanceParams): Transaction
   return tx;
 }
 
+export interface RevokeAllowanceParams {
+  funder: string;
+  capId: string;
+  allowanceId: string;
+}
+
+/**
+ * Unsigned revocation PTB; the funder signs it with their own wallet.
+ * Entry verified live 2026-11-06: 0x2::allowance::revoke(cap, allowance).
+ */
+export function buildRevokeTx(params: RevokeAllowanceParams): Transaction {
+  validateAddress(params.funder, 'funder');
+  validateAddress(params.capId, 'capId');
+  validateAddress(params.allowanceId, 'allowanceId');
+  const tx = new Transaction();
+  tx.setSender(params.funder);
+  tx.moveCall({
+    target: '0x2::allowance::revoke',
+    typeArguments: [BALANCE_SUI_TYPE],
+    arguments: [tx.object(params.capId), tx.object(params.allowanceId)],
+  });
+  return tx;
+}
+
 export interface AllowanceRecipient {
   address: string;
   amountMist: bigint;
@@ -469,13 +467,16 @@ export interface SpendFromAllowanceResult {
   digest: string;
   totalMist: bigint;
   gasMist: bigint;
+  transport: ChainTransportName;
 }
 
 /**
  * Pull `recipients` amounts from the funder's balance through their
  * allowance and fan out in one atomic PTB, signed and gas-paid by the
  * spender. Flow: USD cap check -> build -> dry-run simulation gate
- * (SPEC FR-04) -> execute once -> confirm via effects.
+ * (SPEC FR-04) -> execute once -> confirm via effects, plus an
+ * independent GraphQL cross-check. The whole spend stays on one
+ * transport (Tatum gRPC first, public fallback).
  */
 export async function spendFromAllowance(
   params: SpendFromAllowanceParams
@@ -500,7 +501,7 @@ export async function spendFromAllowance(
   }
 
   const spender = params.spenderKeypair ?? getAgentSpenderKeypair();
-  const client = params.client ?? getTatumSuiClient();
+  const ops = params.client ? chainOpsForLegacy(params.client) : await getChainOps();
 
   const tx = new Transaction();
   tx.setSender(spender.toSuiAddress());
@@ -521,39 +522,33 @@ export async function spendFromAllowance(
       params.recipients.map((r) => r.amountMist)
     );
     params.recipients.forEach((r, i) => tx.transferObjects([parts[i]], r.address));
+    // The source coin keeps a zero remainder; move it along or PTB validation fails.
+    tx.transferObjects([coin], params.recipients[0].address);
   }
   tx.setGasBudget(params.gasBudgetMist ?? 6_000_000n);
-  tx.setGasPrice(BigInt(await client.getReferenceGasPrice()));
+  tx.setGasPrice(await ops.getGasPrice());
 
-  const bytes = await buildWithRetry(client, tx);
+  const bytes = await buildWithRetry(ops, tx);
 
   // Simulation gate: a failed dry-run aborts before anything is signed.
-  const dry = await client.dryRunTransactionBlock({
-    transactionBlock: toBase64(bytes),
-  });
-  if (dry.effects.status.status !== 'success') {
+  const sim = await ops.simulateTx(bytes);
+  if (!sim.ok) {
     throw new Error(
-      `Allowance spend simulation failed: ${dry.effects.status.error ?? 'unknown error'}`
+      `Allowance spend simulation failed: ${sim.error ?? 'unknown error'}`
     );
   }
 
   const { signature } = await spender.signTransaction(bytes);
-  const executed = await client.executeTransactionBlock({
-    transactionBlock: toBase64(bytes),
-    signature,
-    options: { showEffects: true },
-  });
-  const done = await client.waitForTransaction({
-    digest: executed.digest,
-    options: { showEffects: true },
-  });
-  if (done.effects?.status?.status !== 'success') {
+  const exec = await ops.executeTx(bytes, signature);
+  if (!exec.digest) {
     throw new Error(
-      `Allowance spend failed onchain: ${done.effects?.status?.error ?? executed.digest}`
+      'Allowance spend executed but no digest was returned; check the spender wallet before retrying.'
     );
   }
-  const gas = done.effects.gasUsed;
-  const gasMist =
-    BigInt(gas.computationCost) + BigInt(gas.storageCost) - BigInt(gas.storageRebate);
-  return { digest: executed.digest, totalMist, gasMist };
+  const conf = await ops.confirmTx(exec.digest);
+  const cross = await graphqlTxStatus(exec.digest);
+  if (cross === 'failure') {
+    throw new Error(`Allowance spend ${exec.digest} reported failure on cross-check`);
+  }
+  return { digest: exec.digest, totalMist, gasMist: conf.gasMist, transport: ops.transport };
 }

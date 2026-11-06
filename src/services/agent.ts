@@ -15,11 +15,14 @@ import {
 } from "./agentPayments";
 import {
   findAllowancesForSpender,
+  formatUsd,
   getSuiBalanceMist,
   getSuiUsdRate,
   mistToUsd,
   usdToMist,
 } from "./suiReads";
+import { screenSuiAddress } from "./tatumData";
+import { recordPaymentMemoryAsync } from "./paymentMemory";
 import { PROFILE_SUBJECT } from "../config/walrus";
 import { AGENT_PAYMENT_CAP_USD } from "../config/tatum";
 
@@ -33,7 +36,8 @@ import { AGENT_PAYMENT_CAP_USD } from "../config/tatum";
  *   3. Questions are answered from the cached facts and ledger. When an
  *      OpenAI-compatible LLM is configured (LLM_API_KEY / LLM_BASE_URL /
  *      LLM_MODEL), it phrases the answer over the same grounded context;
- *      without one, a deterministic composer answers from the facts.
+ *      otherwise, and on any LLM failure, a deterministic composer
+ *      answers from the facts.
  * Everything monetary is USD in the ledger; SUI is only the settlement
  * asset, converted at the live rate (services/suiReads.getSuiUsdRate).
  */
@@ -110,13 +114,13 @@ async function logExpense(
   await db.insert(transactions).values({
     userId,
     merchantName: merchant,
-    amountUsd: amountUsd.toFixed(2),
+    amountUsd: amountUsd.toFixed(4),
     source: "manual",
   });
   const monthTotal = await monthToDateSpend(userId, merchant);
   let response =
-    `Logged ${amountUsd.toFixed(2)} USD at ${merchant}. ` +
-    `Month to date at ${merchant}: ${monthTotal.toFixed(2)} USD.`;
+    `Logged ${formatUsd(amountUsd)} USD at ${merchant}. ` +
+    `Month to date at ${merchant}: ${formatUsd(monthTotal)} USD.`;
   const fact = findFactFor(facts, merchant);
   if (fact) {
     response += ` Watchdog rule on file: ${factText(fact).split("|")[2]?.trim() ?? ""}`;
@@ -134,15 +138,38 @@ async function payViaAllowance(
       userId,
       standard: "x402",
       recipients: [{ address: recipient, amountUsd }],
-      totalUsd: amountUsd.toFixed(2),
+      totalUsd: amountUsd.toFixed(4),
       status: "awaiting_approval",
+    });
+    recordPaymentMemoryAsync({
+      userId,
+      totalUsd: amountUsd,
+      status: "awaiting_approval",
+      standard: "x402",
+      recipientCount: 1,
     });
     return {
       response:
-        `That is ${amountUsd.toFixed(2)} USD, above the ` +
+        `That is ${formatUsd(amountUsd)} USD, above the ` +
         `${AGENT_PAYMENT_CAP_USD.toFixed(2)} USD auto-pay cap. I recorded it as ` +
         `awaiting your manual approval - nothing was sent.`,
       action: "payment_needs_approval",
+    };
+  }
+
+  const screen = await screenSuiAddress(recipient);
+  if (screen.verdict === "blocked") {
+    await db.insert(agentPayments).values({
+      userId,
+      standard: "x402",
+      recipients: [{ address: recipient, amountUsd }],
+      totalUsd: amountUsd.toFixed(2),
+      status: "blocked",
+      failureReason: screen.detail.slice(0, 500),
+    });
+    return {
+      response: `I refused that payment: ${screen.detail}. Nothing was sent.`,
+      action: "payment_failed",
     };
   }
 
@@ -164,7 +191,7 @@ async function payViaAllowance(
   if (!allowance) {
     return {
       response:
-        `No active allowance from your wallet covers ${amountUsd.toFixed(2)} USD ` +
+        `No active allowance from your wallet covers ${formatUsd(amountUsd)} USD ` +
         `(${(Number(amountMist) / 1e9).toFixed(4)} SUI). Issue one to the agent ` +
         `(${spender}) and try again.`,
       action: "payment_failed",
@@ -182,23 +209,32 @@ async function payViaAllowance(
       userId,
       standard: "x402",
       recipients: [{ address: recipient, amountUsd }],
-      totalUsd: amountUsd.toFixed(2),
+      totalUsd: amountUsd.toFixed(4),
       status: "settled",
       txHash: result.digest,
       gasUsd: mistToUsd(result.gasMist, rate).toFixed(4),
+      transport: result.transport,
       settledAt: new Date(),
     });
     await db.insert(transactions).values({
       userId,
       merchantName: "agent payment",
-      amountUsd: amountUsd.toFixed(2),
+      amountUsd: amountUsd.toFixed(4),
       source: "agent_payment",
       txHash: result.digest,
     });
+    recordPaymentMemoryAsync({
+      userId,
+      totalUsd: amountUsd,
+      status: "settled",
+      standard: "x402",
+      recipientCount: 1,
+      digest: result.digest,
+    });
     return {
       response:
-        `Paid ${amountUsd.toFixed(2)} USD to ${recipient} through your allowance. ` +
-        `Onchain digest: ${result.digest}.`,
+        `Paid ${formatUsd(amountUsd)} USD to ${recipient} through your allowance ` +
+        `(settled via ${result.transport}). Onchain digest: ${result.digest}.`,
       action: "payment_settled",
       txDigest: result.digest,
     };
@@ -214,7 +250,7 @@ async function payViaAllowance(
       userId,
       standard: "x402",
       recipients: [{ address: recipient, amountUsd }],
-      totalUsd: amountUsd.toFixed(2),
+      totalUsd: amountUsd.toFixed(4),
       status: "failed",
       failureReason: reason.slice(0, 500),
     });
@@ -275,7 +311,7 @@ async function answerQuestion(
     const mist = await getSuiBalanceMist(userId);
     const rate = await getSuiUsdRate();
     const sui = (Number(mist) / 1e9).toFixed(4);
-    const usd = rate === null ? "n/a" : mistToUsd(mist, rate).toFixed(2);
+    const usd = rate === null ? "n/a" : formatUsd(mistToUsd(mist, rate));
     return {
       response: `Your wallet holds ${sui} SUI (about ${usd} USD).`,
       action: "info",

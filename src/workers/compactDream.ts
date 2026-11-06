@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+﻿import { and, eq } from "drizzle-orm";
 import { db } from "../db/client";
 import {
   learnedFacts,
@@ -265,10 +265,68 @@ async function synthesizeProfile(
   return true;
 }
 
+/**
+ * Momentum watchdog: when this week's spend tops $20 and runs 1.5x above
+ * the trailing 4-week weekly average, write (or bump) a budget_risk fact.
+ * Cooling weeks write nothing - the old revisions stay on Walrus as the
+ * auditable history of when the watchdog barked.
+ */
+export const RISK_SUBJECT = "overspend momentum";
+
+async function synthesizeBudgetRisk(
+  userId: string,
+  txs: Transaction[],
+  facts: LearnedFact[],
+): Promise<boolean> {
+  const now = Date.now();
+  const weekStart = now - MS_PER_WEEK;
+  const windowStart = now - 5 * MS_PER_WEEK;
+  const thisWeek = txs.filter((tx) => tx.occurredAt.getTime() >= weekStart);
+  const prior = txs.filter(
+    (tx) => tx.occurredAt.getTime() < weekStart && tx.occurredAt.getTime() >= windowStart,
+  );
+  if (thisWeek.length < 3 || prior.length < 3) return false;
+  const sumWeek = thisWeek.reduce((s, tx) => s + Number(tx.amountUsd), 0);
+  const avgPrior = prior.reduce((s, tx) => s + Number(tx.amountUsd), 0) / 4;
+  if (sumWeek < 20 || sumWeek < avgPrior * 1.5) return false;
+
+  const existing = getFact(facts, "budget_risk", RISK_SUBJECT);
+  const existingParsed = existing
+    ? parseWatchdogFact(existing.factPayload.serializedString)
+    : null;
+  const revision = existing
+    ? (existingParsed
+        ? extractRevision(existingParsed.pattern)
+        : existing.version) + 1
+    : 1;
+  const pattern =
+    `weekly spend ${sumWeek.toFixed(2)} USD vs trailing avg ${avgPrior.toFixed(2)} USD, ` +
+    `evidence ${thisWeek.length} txs, rev ${revision}`;
+  const rule =
+    existingParsed?.rule ??
+    `flag non-essential purchases until weekly spend cools below ${(avgPrior * 1.2).toFixed(2)} USD`;
+  const serialized = serializeWatchdogFact({
+    factType: "budget_risk",
+    subject: RISK_SUBJECT,
+    pattern,
+    rule,
+  });
+  if (existing && existing.factPayload.serializedString === serialized) return false;
+  await writeFactDurably({
+    userId,
+    factType: "budget_risk",
+    subject: RISK_SUBJECT,
+    serialized,
+    version: revision,
+  });
+  return true;
+}
+
 export interface CompactionSummary {
   userId: string;
   merchantsMutated: number;
   profileUpdated: boolean;
+  riskUpdated: boolean;
   failures: number;
 }
 
@@ -306,8 +364,14 @@ async function compactUser(userId: string): Promise<CompactionSummary> {
   } catch {
     failures++;
   }
+  let riskUpdated = false;
+  try {
+    riskUpdated = await synthesizeBudgetRisk(userId, txs, facts);
+  } catch {
+    failures++;
+  }
 
-  if (merchantsMutated > 0 || profileUpdated) {
+  if (merchantsMutated > 0 || profileUpdated || riskUpdated) {
     await db
       .insert(syncState)
       .values({ userId, lastMutationAt: new Date() })
@@ -316,7 +380,7 @@ async function compactUser(userId: string): Promise<CompactionSummary> {
         set: { lastMutationAt: new Date() },
       });
   }
-  return { userId, merchantsMutated, profileUpdated, failures };
+  return { userId, merchantsMutated, profileUpdated, riskUpdated, failures };
 }
 
 /** One full pass: recover interrupted writes first, then compact every

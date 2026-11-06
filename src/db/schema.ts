@@ -1,4 +1,4 @@
-import {
+﻿import {
   boolean,
   check,
   index,
@@ -21,8 +21,9 @@ import { sql } from "drizzle-orm";
  * was committed there first (RULE.md Boundary 2).
  *
  * Global rules enforced at the schema level:
- * - All money is USD. Amount columns are numeric(14, 2) named *Usd and
+ * - All money is USD. Amount columns are numeric(14, 4) named *Usd and
  *   are returned by Drizzle as strings, so no float drift can occur.
+ *   Four decimals keep sub-cent agent micro-payments exact.
  * - Serialized memory strings must never contain an em-dash (CHECK on
  *   learned_facts). Format: [watchdog:fact_type] subject | pattern | rule
  * - Agent payments are hard-capped at 50.00 USD per transaction
@@ -104,7 +105,7 @@ export const transactions = pgTable(
       .notNull()
       .references(() => users.walletAddress, { onDelete: "cascade" }),
     merchantName: text("merchant_name").notNull(),
-    amountUsd: numeric("amount_usd", { precision: 14, scale: 2 }).notNull(),
+    amountUsd: numeric("amount_usd", { precision: 14, scale: 4 }).notNull(),
     category: text("category"),
     source: text("source").$type<TransactionSource>().notNull(),
     // Onchain digest. Unique so duplicate Tatum webhooks are dropped by
@@ -193,13 +194,15 @@ export const agentPayments = pgTable(
       .references(() => users.walletAddress, { onDelete: "cascade" }),
     standard: text("standard").$type<PaymentStandard>().notNull(),
     recipients: jsonb("recipients").$type<PaymentRecipient[]>().notNull(),
-    totalUsd: numeric("total_usd", { precision: 14, scale: 2 }).notNull(),
+    totalUsd: numeric("total_usd", { precision: 14, scale: 4 }).notNull(),
     status: text("status").$type<PaymentStatus>().notNull().default("pending"),
     // True when the facilitator or sponsor pays SUI gas instead of the agent.
     gasSponsored: boolean("gas_sponsored").notNull().default(false),
     gasUsd: numeric("gas_usd", { precision: 14, scale: 4 }),
     txHash: text("tx_hash"),
     failureReason: text("failure_reason"),
+    // Which chain transport settled the payment (tatum-grpc preferred).
+    transport: text("transport").notNull().default("tatum"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     settledAt: timestamp("settled_at", { withTimezone: true }),
   },
@@ -208,6 +211,37 @@ export const agentPayments = pgTable(
     // RULE.md Rule 3 enclosure, enforced by the database: an automated
     // agent payment above 50.00 USD can never be recorded as executable.
     check("agent_payments_cap_50_usd", sql`${t.totalUsd} <= 50.00`),
+  ],
+);
+
+// -------------------------------------------------------- scheduled bills
+
+export type BillFrequency = "once" | "weekly" | "monthly";
+export type BillStatus = "active" | "paused" | "done";
+
+export const scheduledBills = pgTable(
+  "scheduled_bills",
+  {
+    billId: uuid("bill_id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.walletAddress, { onDelete: "cascade" }),
+    payeeName: text("payee_name").notNull(),
+    recipient: text("recipient").notNull(),
+    amountUsd: numeric("amount_usd", { precision: 14, scale: 4 }).notNull(),
+    frequency: text("frequency").$type<BillFrequency>().notNull().default("once"),
+    nextDueAt: timestamp("next_due_at", { withTimezone: true }).notNull().defaultNow(),
+    status: text("status").$type<BillStatus>().notNull().default("active"),
+    // Pinned allowance to spend through; null means any covering allowance.
+    allowanceId: text("allowance_id"),
+    lastDigest: text("last_digest"),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("scheduled_bills_user_idx").on(t.userId, t.status, t.nextDueAt),
+    check("scheduled_bills_cap_50_usd", sql`${t.amountUsd} <= 50.00`),
   ],
 );
 
@@ -273,3 +307,5 @@ export type MediaUpload = typeof mediaUploads.$inferSelect;
 export type PendingWrite = typeof pendingWrites.$inferSelect;
 export type AgentPayment = typeof agentPayments.$inferSelect;
 export type NewAgentPayment = typeof agentPayments.$inferInsert;
+export type ScheduledBill = typeof scheduledBills.$inferSelect;
+export type NewScheduledBill = typeof scheduledBills.$inferInsert;

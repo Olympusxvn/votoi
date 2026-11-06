@@ -1,13 +1,15 @@
-import { suiRpc, TatumRpcError } from "../config/tatum";
+﻿import { TatumRpcError } from "../config/tatum";
+import { chainCall } from "../config/chainTransport";
+import { getTatumSuiUsdRate } from "./tatumData";
 
 /**
- * Read-only Sui queries through the Tatum gateway (plain JSON-RPC via
- * config/tatum.suiRpc: cheap single calls, no SDK resolver bursts).
+ * Read-only Sui queries through the active chain transport (Tatum gRPC
+ * first, public fallback - see config/chainTransport).
  *
  * Transaction confirmation lives here on purpose: Tatum Notifications
  * does not support Sui (verified 2026-10-21), so payment status is
- * confirmed with sui_getTransactionBlock reads instead of webhooks -
- * point checks on demand, never block polling (RULE.md Guardrail 1).
+ * confirmed with transaction reads instead of webhooks - point checks
+ * on demand, never block polling (RULE.md Guardrail 1).
  */
 
 export const SUI_COIN_TYPE = "0x2::sui::SUI";
@@ -37,7 +39,7 @@ function toBigIntOrNull(value: unknown): bigint | null {
 }
 
 export async function getSuiBalanceMist(owner: string): Promise<bigint> {
-  const res = await suiRpc<{ totalBalance: string }>("suix_getBalance", [
+  const res = await chainCall<{ totalBalance: string }>("suix_getBalance", [
     owner,
     SUI_COIN_TYPE,
   ]);
@@ -63,7 +65,7 @@ export interface AllowanceState {
 export async function getAllowanceState(
   allowanceId: string,
 ): Promise<AllowanceState | null> {
-  const res = await suiRpc<SuiObjectContent>("sui_getObject", [
+  const res = await chainCall<SuiObjectContent>("sui_getObject", [
     allowanceId,
     { showContent: true },
   ]);
@@ -94,7 +96,7 @@ export async function findAllowancesForSpender(
   funder: string,
   spender: string,
 ): Promise<AllowanceState[]> {
-  const page = await suiRpc<{
+  const page = await chainCall<{
     data: Array<{ data?: { objectId: string; content?: { fields?: Record<string, unknown> } } }>;
   }>("suix_getOwnedObjects", [
     funder,
@@ -122,7 +124,7 @@ export async function getTransactionStatus(
   digest: string,
 ): Promise<TransactionStatus> {
   try {
-    const res = await suiRpc<{ effects?: { status?: { status?: string } } }>(
+    const res = await chainCall<{ effects?: { status?: { status?: string } } }>(
       "sui_getTransactionBlock",
       [digest, { showEffects: true }],
     );
@@ -142,7 +144,7 @@ export async function listRecentTransactions(
   owner: string,
   limit = 10,
 ): Promise<RecentTransaction[]> {
-  const res = await suiRpc<{
+  const res = await chainCall<{
     data: Array<{ digest: string; timestampMs?: string }>;
   }>("suix_queryTransactionBlocks", [
     { filter: { FromAddress: owner }, options: {} },
@@ -162,14 +164,19 @@ let rateCache: { usd: number; at: number } | null = null;
 
 /**
  * SUI price in USD for accounting conversions (all ledger math is USD;
- * settlement is in SUI). SUI_USD_RATE env wins; otherwise CoinGecko's
- * keyless endpoint, cached for 60 seconds. Returns null when no rate is
+ * settlement is in SUI). Precedence: SUI_USD_RATE env, Tatum Data API,
+ * CoinGecko keyless, cached for 60 seconds. Returns null when no rate is
  * available - callers must refuse to quote or pay rather than guess.
  */
 export async function getSuiUsdRate(): Promise<number | null> {
   const fromEnv = Number(process.env.SUI_USD_RATE);
   if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
   if (rateCache && Date.now() - rateCache.at < 60_000) return rateCache.usd;
+  const fromTatum = await getTatumSuiUsdRate();
+  if (fromTatum !== null) {
+    rateCache = { usd: fromTatum, at: Date.now() };
+    return fromTatum;
+  }
   try {
     const res = await fetch(
       "https://api.coingecko.com/api/v3/simple/price?ids=sui&vs_currencies=usd",
@@ -199,4 +206,10 @@ export function usdToMist(amountUsd: number, suiUsdRate: number): bigint {
 
 export function mistToUsd(mist: bigint, suiUsdRate: number): number {
   return (Number(mist) / 1_000_000_000) * suiUsdRate;
+}
+
+/** Display helper: sub-cent micro-payments show 4 decimals, else 2. */
+export function formatUsd(amountUsd: number): string {
+  if (amountUsd !== 0 && Math.abs(amountUsd) < 0.1) return amountUsd.toFixed(4);
+  return amountUsd.toFixed(2);
 }
