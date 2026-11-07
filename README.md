@@ -39,6 +39,23 @@ check that runs in under a minute:
    blob id. Citations appear only when the answer's sources are known
    exactly; the LLM path never gets invented citations.
 
+## For judges
+
+What you can check without running anything: the two settled payments
+on Suiscan (0.01 USD chat payment, 0.003 USD two-recipient MPP split),
+the demo video submitted with the entry, the code, and the audit report
+(`docs/audit-2026-11-04.md`).
+
+What needs a local run: chat, wipe-cache rehydrate, allowance issue and
+pay, receipt upload. See "Run locally" below.
+
+A fresh local run starts empty: 0 facts, 0 payments. The 12 facts and
+the settled payments live in the author's MemWal account and namespace
+and in the author's database. Walrus Memory namespaces are isolated per
+account by design, and the delegate key is a secret that is never
+shared, so a fresh run cannot read the author's facts. The live showcase
+link at the top is a static page, not the app.
+
 ## What it does
 
 - **Chat-first expense tracking.** Log spending in plain chat. Answers
@@ -56,9 +73,10 @@ check that runs in under a minute:
   50.00 USD per transaction moves without a human in the loop: over-limit
   payments are recorded as `awaiting_approval` and never sent.
 - **Receipts, honestly async.** Upload a receipt and the UI follows its
-  real queue status (queued, processing, done, failed). No blob id is
-  claimed for receipts, because receipt uploads are not Walrus facts
-  (see Limitations).
+  real queue status (queued, processing, done, failed). No Walrus Memory
+  fact blob id is claimed for receipts, because receipt uploads are not
+  Walrus facts; the raw file gets a separate vault blob id on the receipt
+  status after the background upload (see Limitations).
 
 ## Proof, not promises
 
@@ -202,14 +220,18 @@ address to drive every panel.
 |---|---|---|
 | `TATUM_API_KEY` | Yes | Tatum Sui gateways (gRPC primary + Data APIs) |
 | `TATUM_SUI_GRPC_HOST` | No | Tatum native gRPC host (primary transport) |
+| `TATUM_SUI_GRPC_KEY` | No | Separate key for the gRPC gateway (defaults to TATUM_API_KEY) |
+| `TATUM_WEBHOOK_SECRET` | No | Tatum webhook signature secret |
 | `MEMWAL_ACCOUNT_ID` | Yes | Walrus Memory account |
 | `MEMWAL_PRIVATE_KEY` | Yes | MemWal delegate key (server only) |
+| `MEMWAL_SERVER_URL` | No | Walrus Memory relayer URL |
 | `DATABASE_URL` | Yes | Neon Postgres connection |
 | `SUI_NETWORK` | No | `mainnet` or `testnet` (defaults derive the rest) |
 | `TATUM_SUI_RPC_URL` | No | Legacy JSON-RPC gateway URL override |
 | `SUI_PUBLIC_GRPC_URL`, `SUI_GRAPHQL_URL` | No | Public fallback endpoints |
 | `SUI_USD_RATE` | No | SUI/USD rate override |
 | `VOTOI_AGENT_SUI_ADDRESS` | No | Dedicated agent wallet shown in status |
+| `VOTOI_X402_FACILITATOR_URL` | No | Own x402 facilitator endpoint (empty until deployed) |
 | `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | No | Chat model configuration |
 | `WALRUS_PUBLISHER_URL`, `WALRUS_AGGREGATOR_URL` | No | Receipt vault endpoints |
 | `COMPACTION_INTERVAL_MS`, `BILLPAY_AUTO_RUN` | No | Dream schedule (default 10 min, bills on) |
@@ -237,7 +259,8 @@ address to drive every panel.
 - `app/` - React + Vite + Tailwind frontend
 - `src/server.ts` - Express server wiring every route to real services
 - `src/services/` - Walrus rehydration, Sui reads, allowance payments
-- `src/api/` - chat, facts, payments, allowance routes
+- `src/api/` - chat and webhook routes; facts, payments, and allowance
+  routes are wired in `src/server.ts`
 - `src/workers/` - async OCR and background compaction
 - `src/db/` - Drizzle client and schema
 - `drizzle/` - migrations
