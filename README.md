@@ -245,12 +245,13 @@ address to drive every panel.
   to Walrus blobs (id on the receipt status), but the OCR vision
   provider is not wired, so merchant and amount stay null until text
   exists.
-- **Gateway incident, stated plainly.** As of Nov 4, 2026, the generic
-  Tatum JSON-RPC gateway returns HTTP 404 for Sui methods with this
-  project's key (still true Nov 6). Chain traffic runs on the Tatum
-  native gRPC gateway instead, with a public fallback. If every
-  transport is down, `/api/status` reports `chainReadsUnavailable` and
-  spent totals come from the local ledger.
+- **JSON-RPC gateway retired, stated plainly.** Sui phased out legacy
+  JSON-RPC on Mainnet and Testnet during summer 2026 (July, per Tatum,
+  confirmed Nov 7), so the generic Tatum JSON-RPC gateway returns
+  HTTP 404 for Sui methods with this project's key. Chain traffic runs
+  on the Tatum native gRPC gateway instead, with a public fallback. If
+  every transport is down, `/api/status` reports `chainReadsUnavailable`
+  and spent totals come from the local ledger.
 - **Memory is append-only.** Corrections land as newer revisions; old
   facts are never deleted from Walrus.
 
