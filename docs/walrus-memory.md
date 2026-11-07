@@ -132,6 +132,19 @@ VOTOI's answers are architectural, not hopeful:
   explicitly labeled no-memory answer instead of dying - availability
   without pretending.
 
+### Where the remaining latency actually sits
+
+The measured chat path (audit 2026-11-04, same deterministic question,
+three timed calls) returned 2.32s (cold), 2.51s (warm) and 1.14s (warm).
+That variance is the Neon cache read, not Walrus: the driver is
+`neon-http`, stateless, so every query is one HTTPS round-trip, and
+serverless compute can cold-start after idle. MemWal is deliberately not
+the bottleneck here - recall takes seconds and a confirmed remember takes
+tens of seconds, which is exactly why neither is on the request path. The
+next lever, if sub-second chat is ever wanted, is the Neon side (keeping
+compute warm, or holding the 12 facts in server memory and re-reading
+Neon only after a compaction write), not a return to per-turn recall.
+
 ## 7. Failure modes, observed live - not hypothetical
 
 - **2026-09-19 (upstream #1047):** 3 of 5 accepted remember jobs failed
@@ -171,3 +184,7 @@ will fail; the memory must not.**
 - Embedding-based recall quality bounds rehydration precision; the
   slot/revision protocol exists precisely so that a fuzzy recall can
   never resurrect a stale belief over a newer one.
+- Chat latency is bounded by the Neon cache read (measured 1.14-2.51s on
+  2026-11-04), not by Walrus. Recall and remember stay off the request
+  path by design, so a slow relayer cannot slow down chat; it can only
+  delay a background write or a cold rebuild.
