@@ -9,11 +9,11 @@
 > `docs/submission-feedback.md`; per-call logs in
 > `scripts/farm-api-results.jsonl`.
 >
-> RESOLVED 2026-11-07: Tatum confirmed the JSON-RPC interface is retired
+> RESOLVED 2026-11-07: I reported the JSON-RPC 404 to Tatum; Tatum answered
+> to switch to the gRPC endpoint, confirming the JSON-RPC interface is retired
 > (Sui phased out legacy JSON-RPC on Mainnet and Testnet during summer 2026,
-> July per Tatum); the recommended path is the gRPC endpoint. No restore
-> needed; VOTOI already runs on gRPC. If this ticket was already sent, it is
-> closed as answered; if not, do not send it.
+> July per Tatum). No restore needed; VOTOI already runs on gRPC. Closed as
+> answered.
 
 ---
 
